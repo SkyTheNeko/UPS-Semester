@@ -34,7 +34,7 @@ class TcpClient:
 
     def connect(self, host: str, port: int, timeout: float = 5.0) -> None:
         """
-        Connect to a TCP server and start the receive loop thread.
+        Connect to a TCP server and start the receive loop thread
 
         Args:
             host: Server hostname/IP address
