@@ -50,10 +50,10 @@ class App(ttk.Frame):
 
         self._ping_job: str | None = None   # Tkinter after() job id for ping tick
         self._ping_interval_ms: int = 5000  # Interval between PINGs
-        self._pong_timeout_ms: int = 15000  # Max allowed time without PONG before disconnect
+        self._pong_timeout_ms: int = 10000  # Max allowed time without PONG before disconnect
 
         self._awaiting_pong: bool = False   # True after sending PING until matching PONG arrives
-        self._last_ping_sent: float = 0.0   # monotonic() timestamp of the last sent PING
+        self._last_ping_sent: float = 0.0   # Timestamp of the last sent PING
 
         self.root.protocol("WM_DELETE_WINDOW", self._on_app_close)
 
@@ -468,7 +468,7 @@ class App(ttk.Frame):
             self._awaiting_pong = False
             self._last_ping_sent = 0.0
 
-            self._hard_reset_after_disconnect(msg)
+            self._hard_reset(msg)
             self._schedule_reconnect()
             self._append_log(f"[net] {msg}")
             return
@@ -496,7 +496,7 @@ class App(ttk.Frame):
             self._awaiting_pong = False
             self._last_ping_sent = 0.0
 
-            self._hard_reset_after_disconnect("Server disconnected")
+            self._hard_reset("Server disconnected")
 
             self._schedule_reconnect()
 
@@ -528,6 +528,10 @@ class App(ttk.Frame):
         Args:
             line: Raw server protocol line
         """
+        if line.startswith("RESP PONG"):
+            self._awaiting_pong = False
+            return
+        
         self._append_log(f"<< {line}")
 
         prev_phase = self.model.game.phase
@@ -602,8 +606,8 @@ class App(ttk.Frame):
                     f"{winner} won the round!"
                 )
                 
-        if line.startswith("RESP PONG"):
-            self._awaiting_pong = False
+        #if line.startswith("RESP PONG"):
+        #    self._awaiting_pong = False
             
         if prev_room !=  new_room and new_room < 0:
             self._current_room_id = -1
@@ -629,7 +633,9 @@ class App(ttk.Frame):
         def work() -> None:
             try:
                 self.net.send_line(line)
-                self.q.put(("line", f">> {line}"))
+                if line != "REQ PING":
+                    self.q.put(("line", f">> {line}"))
+                # self.q.put(("line", f">> {line}"))
             except Exception as e:
                 self.q.put(("status", f"RX_ERROR {e}"))
 
@@ -1106,7 +1112,7 @@ class App(ttk.Frame):
         threading.Thread(target = work, daemon = True).start()
 
         
-    def _hard_reset_after_disconnect(self, reason: str) -> None:
+    def _hard_reset(self, reason: str) -> None:
         """
         Clear UI + model state after a disconnect
         
@@ -1123,8 +1129,6 @@ class App(ttk.Frame):
         if self._game_win is not None and self._game_win.winfo_exists():
             self._game_win.destroy()
         self._game_win = None
-
-        self._append_log(f"[ui] game stopped: {reason}")
         
     def _start_ping(self) -> None:
         """
@@ -1159,19 +1163,23 @@ class App(ttk.Frame):
             return
 
         now = time.monotonic()
+        timeout_s = self._pong_timeout_ms / 1000.0
 
-        if self._awaiting_pong and (now - self._last_ping_sent) > self._pong_timeout_ms:
-            self._append_log("[net] PONG timeout - forcing disconnect")
-            try:
-                self.net.close()
-            except Exception:
-                pass
-            self.q.put(("status", "DISCONNECTED"))
+        if self._awaiting_pong:
+            if (now - self._last_ping_sent) > timeout_s:
+                self._append_log("[net] PONG timeout - forcing disconnect")
+                try:
+                    self.net.close()
+                except Exception:
+                    pass
+                return
+
+            self._ping_job = self.after(int(self._ping_interval_ms), self._ping_tick)
             return
 
         self._awaiting_pong = True
         self._last_ping_sent = now
-
         self._send("REQ PING")
 
         self._ping_job = self.after(int(self._ping_interval_ms), self._ping_tick)
+
