@@ -528,6 +528,22 @@ class App(ttk.Frame):
         Args:
             line: Raw server protocol line
         """
+        ok, why = self._is_valid_protocol_line(line)
+        if not ok:
+            self._disconnect_on_invalid(line, why)
+            return
+
+        self._append_log(f"<< {line}")
+
+        prev_phase = self.model.game.phase
+        prev_room = getattr(self.model.game, "room_id", -1)
+
+        try:
+            self.model.apply_line(line)
+        except Exception as e:
+            self._disconnect_on_invalid(line, f"model.apply_line exception: {e}")
+            return
+
         if line.startswith("RESP PONG"):
             self._awaiting_pong = False
             return
@@ -1182,4 +1198,47 @@ class App(ttk.Frame):
         self._send("REQ PING")
 
         self._ping_job = self.after(int(self._ping_interval_ms), self._ping_tick)
+
+    def _disconnect_on_invalid(self, line: str, reason: str) -> None:
+        """
+        Treat a protocol violation as fatal: close connection and reuse RX_ERROR path.
+        """
+        self._append_log(f"[proto] INVALID: {reason}: {line!r}")
+
+        try:
+            self.net.close()
+        except Exception:
+            pass
+
+        self.q.put(("status", f"RX_ERROR PROTOCOL_VIOLATION {reason}"))
+        self.q.put(("status", "DISCONNECTED"))
+
+    def _is_valid_protocol_line(self, line: str) -> tuple[bool, str]:
+        """
+        Minimal protocol sanity checks. Return (ok, reason_if_not_ok).
+        Adjust allowed prefixes to match your actual protocol.
+        """
+        if line is None:
+            return False, "line is None"
+
+        s = line.strip()
+        if not s:
+            return False, "empty line"
+
+        if len(s) > 1024:
+            return False, f"line too long ({len(s)})"
+
+        allowed_prefixes = (
+            "RESP ",
+            "EVT ",
+            "ERR ",
+        )
+        if not s.startswith(allowed_prefixes):
+            return False, "unknown message prefix"
+
+        if s.startswith("RESP PONG") and s != "RESP PONG":
+            return False, "malformed PONG"
+
+        return True, ""
+
 
