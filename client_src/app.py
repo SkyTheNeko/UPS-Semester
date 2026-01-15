@@ -533,8 +533,10 @@ class App(ttk.Frame):
             self._disconnect_on_invalid(line, why)
             return
 
-        self._append_log(f"<< {line}")
-
+        if line.startswith("RESP PONG"):
+            self._awaiting_pong = False
+            return
+        
         prev_phase = self.model.game.phase
         prev_room = getattr(self.model.game, "room_id", -1)
 
@@ -544,28 +546,10 @@ class App(ttk.Frame):
             self._disconnect_on_invalid(line, f"model.apply_line exception: {e}")
             return
 
-        if line.startswith("RESP PONG"):
-            self._awaiting_pong = False
-            return
-        
         self._append_log(f"<< {line}")
 
-        prev_phase = self.model.game.phase
-        prev_room=getattr(self.model.game, "room_id", -1)
-
-        self.model.apply_line(line)
-
-        if line.startswith("ERR LOGIN") and "code=NICK_TAKEN" in line:
-            ses = load_session_for(self.model.nick)
-            if ses:
-                self.model.session = ses
-                self._send(f"REQ RESUME nick={self.model.nick} session={ses}")
-            else:
-                messagebox.showerror("Login", "Nickname is already in use!")
-            return
-
         new_phase = self.model.game.phase
-        new_room=getattr(self.model.game, "room_id", -1)
+        new_room = getattr(self.model.game, "room_id", -1)
 
         if line.startswith("ERR RESUME"):
             if self.model.nick:
@@ -607,35 +591,31 @@ class App(ttk.Frame):
             
         if line.startswith("EVT GAME_END"):
             winner = None
-            parts = line.split()
-            for p in parts:
+            for p in line.split():
                 if p.startswith("winner="):
                     winner = p.split("=", 1)[1]
 
             if winner:
-                self.lbl_round_winner.configure(
-                    text = f"Last round winner: {winner}"
-                )
+                self.lbl_round_winner.configure(text=f"Last round winner: {winner}")
+                messagebox.showinfo("Round finished", f"{winner} won the round!")
 
-                messagebox.showinfo(
-                    "Round finished",
-                    f"{winner} won the round!"
-                )
-                
-        #if line.startswith("RESP PONG"):
-        #    self._awaiting_pong = False
+            self._close_game_window()
             
-        if prev_room !=  new_room and new_room < 0:
+            self.model.game.phase = "LOBBY"
+
+            self._refresh_ui()
+            return
+
+        if prev_room != new_room and new_room < 0:
             self._current_room_id = -1
             self._current_room_name = ""
             self.on_list_rooms()
 
         if prev_phase != "GAME" and new_phase == "GAME":
             self._ensure_game_window()
-        if prev_phase == "GAME" and new_phase !=  "GAME":
-            if self._game_win is not None and self._game_win.winfo_exists():
-                self._game_win.destroy()
-            self._game_win = None
+
+        if prev_phase == "GAME" and new_phase != "GAME":
+            self._close_game_window()
 
         self._last_phase = new_phase
 
@@ -1201,7 +1181,7 @@ class App(ttk.Frame):
 
     def _disconnect_on_invalid(self, line: str, reason: str) -> None:
         """
-        Treat a protocol violation as fatal: close connection and reuse RX_ERROR path.
+        Treat a protocol violation as fatal: close connection and reuse RX_ERROR path
         """
         self._append_log(f"[proto] INVALID: {reason}: {line!r}")
 
@@ -1220,7 +1200,7 @@ class App(ttk.Frame):
         if line is None:
             return False, "line is None"
 
-        s = line.strip()
+        s = line.strip(">> ").strip("<< ")
         if not s:
             return False, "empty line"
 
@@ -1231,15 +1211,14 @@ class App(ttk.Frame):
             "RESP ",
             "EVT ",
             "ERR ",
+            "REQ ",
         )
         if not s.startswith(allowed_prefixes):
             return False, "unknown message prefix"
 
-        if s.startswith("RESP PONG") and s != "RESP PONG":
-            return False, "malformed PONG"
-
         return True, ""
 
-
-
-
+    def _close_game_window(self) -> None:
+        if self._game_win is not None and self._game_win.winfo_exists():
+            self._game_win.destroy()
+        self._game_win = None
