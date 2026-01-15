@@ -1215,8 +1215,7 @@ class App(ttk.Frame):
 
     def _is_valid_protocol_line(self, line: str) -> tuple[bool, str]:
         """
-        Minimal protocol sanity checks. Return (ok, reason_if_not_ok).
-        Adjust allowed prefixes to match your actual protocol.
+        Minimal protocol sanity checks
         """
         if line is None:
             return False, "line is None"
@@ -1240,5 +1239,7 @@ class App(ttk.Frame):
             return False, "malformed PONG"
 
         return True, ""
+
+
 
 
